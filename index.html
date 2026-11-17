@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>벽돌깨기</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #10131c; color: #e8ecf5; font-family: "Malgun Gothic", sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  #hud { width: 480px; max-width: 96vw; display: flex; justify-content: space-between; font-size: 18px; }
+  #wrap { position: relative; width: 480px; max-width: 96vw; }
+  canvas { width: 100%; display: block; background: #181d2b; border: 2px solid #2d3652; border-radius: 6px; box-sizing: border-box; touch-action: none; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(16,19,28,.8); border-radius: 6px; text-align: center; }
+  #overlay h2 { margin: 0; font-size: 32px; }
+  #overlay p { margin: 0; font-size: 18px; line-height: 1.5; }
+  button { font: inherit; font-size: 20px; padding: 10px 28px; border: 0; border-radius: 8px; background: #5ac8ff; color: #10131c; cursor: pointer; }
+  button:hover { background: #8ad8ff; }
+  #help { font-size: 13px; color: #8d97b5; }
+</style>
+</head>
+<body>
+<div id="hud"><span id="score">점수: 0</span><span id="lives">목숨: ♥♥♥</span></div>
+<div id="wrap">
+  <canvas id="c" width="480" height="560"></canvas>
+  <div id="overlay">
+    <h2 id="title">벽돌깨기</h2>
+    <p id="info"></p>
+    <button id="btn">시작</button>
+  </div>
+</div>
+<div id="help">← → 키 · 마우스 · 손가락으로 끌어서 막대를 움직이세요</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const COLS = 10, ROWS = 7, GAP = 8, BH = 20, TOP = 20, SPECIAL = 8;
+const BW = (W - GAP * (COLS + 1)) / COLS;
+const colors = ['#ff5d73', '#ff9f5a', '#ffd35a', '#6fe08a', '#5ac8ff'];
+
+let paddle, balls, bricks, score, lives, running = false;
+let best = 0;            // 저장하지 않고 화면(메모리) 안에서만 기억
+const keys = {};
+
+function newGame() {
+  score = 0; lives = 3;
+  paddle = { w: 90, h: 12, x: W / 2 - 45, y: H - 36 };
+  bricks = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      bricks.push({ x: GAP + c * (BW + GAP), y: TOP + r * (BH + GAP), color: colors[r % colors.length], special: false });
+  // 특별 블록: 무작위로 몇 개 골라 공을 5개로 늘려 주는 블록으로 만든다
+  const idx = bricks.map((_, i) => i).sort(() => Math.random() - 0.5).slice(0, SPECIAL);
+  for (const i of idx) bricks[i].special = true;
+  resetBall();
+  updateHud();
+}
+
+function makeBall(x, y, a, sp = 5) {
+  return { x, y, r: 8, vx: sp * Math.sin(a), vy: -sp * Math.cos(a) };
+}
+function resetBall() {
+  balls = [makeBall(paddle.x + paddle.w / 2, paddle.y - 9, Math.random() * 0.8 - 0.4)];
+}
+// 부딪힌 공 하나를 다섯 개로 만든다 (원래 공 + 새 공 4개, 각도만 다르게)
+function multiBall(from) {
+  const sp = Math.min(Math.hypot(from.vx, from.vy), 9);
+  const base = Math.atan2(from.vx, -from.vy);
+  for (const d of [-0.6, -0.3, 0.3, 0.6])
+    balls.push(makeBall(from.x, from.y, base + d, sp));
+}
+
+function updateHud() {
+  document.getElementById('score').textContent = '점수: ' + score;
+  document.getElementById('lives').textContent = '목숨: ' + '♥'.repeat(lives);
+}
+
+function showOverlay(title, info, label) {
+  document.getElementById('title').textContent = title;
+  document.getElementById('info').innerHTML = info;
+  document.getElementById('btn').textContent = label;
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+function start() {
+  document.getElementById('overlay').style.display = 'none';
+  if (!bricks.length || lives <= 0) newGame();
+  running = true;
+}
+
+function endGame(win) {
+  running = false;
+  best = Math.max(best, score);
+  showOverlay('게임 끝', (win ? '벽돌을 모두 깼어요!<br>' : '') + '점수: ' + score + '<br>최고 점수: ' + best, '다시 하기');
+  lives = Math.max(lives, 0);
+  bricks = [];            // 다음 시작 때 새 게임으로 초기화
+}
+
+function update() {
+  if (keys.ArrowLeft) paddle.x -= 7;
+  if (keys.ArrowRight) paddle.x += 7;
+  paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+  if (!running) return;
+  for (const ball of balls.slice()) stepBall(ball);
+  if (running && !balls.length) loseLife();
+}
+
+function loseLife() {
+  lives--; updateHud();
+  if (lives <= 0) endGame(false);
+  else { running = false; resetBall(); showOverlay('공을 놓쳤어요', '남은 목숨: ' + lives, '계속'); }
+}
+
+function stepBall(ball) {
+  if (!running) return;
+  ball.x += ball.vx; ball.y += ball.vy;
+  if (ball.x < ball.r) { ball.x = ball.r; ball.vx *= -1; }
+  if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.vx *= -1; }
+  if (ball.y < ball.r) { ball.y = ball.r; ball.vy *= -1; }
+
+  // 막대
+  if (ball.vy > 0 && ball.y + ball.r >= paddle.y && ball.y + ball.r <= paddle.y + paddle.h + 6 &&
+      ball.x >= paddle.x - ball.r && ball.x <= paddle.x + paddle.w + ball.r) {
+    const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+    const sp = Math.min(Math.hypot(ball.vx, ball.vy) * 1.01, 9);
+    ball.vx = sp * Math.sin(hit * 1.05); ball.vy = -sp * Math.cos(hit * 1.05);
+    ball.y = paddle.y - ball.r;
+  }
+
+  // 벽돌
+  for (let i = 0; i < bricks.length; i++) {
+    const b = bricks[i];
+    const nx = Math.max(b.x, Math.min(ball.x, b.x + BW));
+    const ny = Math.max(b.y, Math.min(ball.y, b.y + BH));
+    const dx = ball.x - nx, dy = ball.y - ny;
+    if (dx * dx + dy * dy <= ball.r * ball.r) {
+      if (Math.abs(dx) > Math.abs(dy)) ball.vx *= -1; else ball.vy *= -1;
+      bricks.splice(i, 1);
+      score += 10; updateHud();
+      if (b.special) multiBall(ball);
+      if (!bricks.length) { endGame(true); }
+      return;
+    }
+  }
+
+  // 공을 놓침
+  if (ball.y - ball.r > H) balls.splice(balls.indexOf(ball), 1);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  for (const b of bricks) {
+    ctx.fillStyle = b.special ? '#ffd700' : b.color; ctx.fillRect(b.x, b.y, BW, BH);
+    if (b.special) {
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(b.x + 1, b.y + 1, BW - 2, BH - 2);
+      ctx.fillStyle = '#10131c'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('×5', b.x + BW / 2, b.y + BH / 2 + 5);
+    }
+  }
+  ctx.fillStyle = '#e8ecf5';
+  ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+  if (!running) { balls[0].x = paddle.x + paddle.w / 2; balls[0].y = paddle.y - balls[0].r - 1; }
+  ctx.fillStyle = '#ffd35a';
+  for (const ball of balls) { ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2); ctx.fill(); }
+}
+
+addEventListener('keydown', e => { if (e.key.startsWith('Arrow')) { keys[e.key] = true; e.preventDefault(); } });
+addEventListener('keyup', e => keys[e.key] = false);
+
+function moveTo(clientX) {
+  const rect = cv.getBoundingClientRect();
+  paddle.x = (clientX - rect.left) * (W / rect.width) - paddle.w / 2;
+}
+cv.addEventListener('mousemove', e => moveTo(e.clientX));
+cv.addEventListener('touchstart', e => moveTo(e.touches[0].clientX), { passive: true });
+cv.addEventListener('touchmove', e => { moveTo(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+document.getElementById('btn').addEventListener('click', start);
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+newGame();
+showOverlay('벽돌깨기', '막대로 공을 받아 벽돌을 모두 깨세요!', '시작');
+loop();
+</script>
+</body>
+</html>
